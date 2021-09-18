@@ -6,7 +6,7 @@
 #include <string.h>     
 #include <unistd.h>  
 #include <signal.h>  
-#include <time.h>     
+#include <sys/time.h>     
 
 #define RCVBUFSIZE 255
 
@@ -19,25 +19,29 @@ struct icmp_struct {
     char data[56];
 };
 
-void DieWithError(char *str) {
-    fprintf(stderr, "Error: %s", str);
+void DieWithError(char *str, int errorCode) {
+    fprintf(stderr, "Error: %s. Error code %i\n", str, errorCode);
     exit(1);
 }
 
-double getTime() {
-    double time = 0;
-    
-    return time;
+long mtime() {
+  struct timeval t;
+
+  gettimeofday(&t, NULL);
+  long mt = (long)t.tv_sec * 1000 + t.tv_usec / 1000;
+  return mt;
 }
 
 int main(int argc, char **argv) {
-    char echoBuffer[RCVBUFSIZE];    
     char* servIP = "8.8.8.8";
-    int timeout = 1000;  
-    int sock;                        
-    struct sockaddr_in echoServAddr; 
-    struct icmp_struct icmp, *recv_icmp;
+    char echoBuffer[RCVBUFSIZE];
+    int sock;
+    int timeout = 1000;
+    int timeoutCounter = 0;
     pid_t pid = getpid();
+    long _time;
+    struct sockaddr_in echoServAddr;
+    struct icmp_struct icmp, *recv_icmp;
 
     if(argc == 2) servIP = argv[1];
     if(argc == 3) {
@@ -50,39 +54,40 @@ int main(int argc, char **argv) {
     }
 
     if((sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0)
-        DieWithError("socket() failed");
+        DieWithError("socket() failed", sock);
 
     bzero(&echoServAddr, sizeof(echoServAddr));
 
     echoServAddr.sin_family = AF_INET;
     echoServAddr.sin_addr.s_addr = inet_addr(servIP);
     
-    // srand(time(NULL));
-
     icmp.type = 8;      // 8 - запрос, 0 - ответ
     icmp.code = 0;
-    // icmp.id = rand();
     icmp.id = pid;
     icmp.checksum = 0;
     icmp.seq = 1;
-    strcpy(icmp.data, "abcdefghi");
 
-    double requestTime = getTime();
+    _time = mtime();
+    sprintf(icmp.data, "%ld", _time);
 
-    if(!sendto(sock, &icmp, sizeof(icmp), 0, (struct sockaddr *) &echoServAddr, sizeof(echoServAddr)))
-        DieWithError("send() sent a different number of bytes than expected");
+    // while (1) {
+    //     if(!sendto(sock, icmp.data, sizeof(icmp) + 10, 0, (struct sockaddr *) &echoServAddr, sizeof(echoServAddr)))
+    //         DieWithError("send() sent a different number of bytes than expected", 1);
 
-    recvfrom(sock, echoBuffer, 255, 0, 0, 0);
-    recv_icmp = &echoBuffer[20];
+    //     // timeoutCounter++;
+    //     // if(timeoutCounter > timeout) {
+    //         recvfrom(sock, echoBuffer, RCVBUFSIZE, 0, 0, 0);
+    //         // recv_icmp = &echoBuffer[20];
+    //         printf("recv packet with id = %hu\n", recv_icmp->id);
+    //         break;
+    //     // }
+    // }
 
-    printf("recv packet with id = %i\n", recv_icmp->id);
+    _time = mtime() - _time;
 
-    double replayTime = getTime();
-    double deltaTime = requestTime - replayTime;
-
-    if(recv_icmp->type == 0 && recv_icmp->id == pid) {
-        printf("seq= %i timeout= %i time= %f\n", recv_icmp->seq, timeout, deltaTime);
-    }
+    // if(recv_icmp->type == 0 && recv_icmp->id == pid) {
+    //     printf("seq= %i timeout= %i time= %ld ms\n", recv_icmp->seq, timeout, _time);
+    // }
 
     return 0;
 }
