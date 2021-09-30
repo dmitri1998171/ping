@@ -9,6 +9,9 @@
 #include <sys/time.h>     
 
 #define RCVBUFSIZE 255
+#define TIME_AVG_SIZE 5
+
+ushort termFlag = 0;
 
 struct icmp_struct {
     unsigned char type;
@@ -60,14 +63,44 @@ unsigned short in_cksum(unsigned short *addr, int len) {
     return(answer);
 }
 
+void findAvg(float *arr, float *timeAvg) {
+    for(int i = 0; i < TIME_AVG_SIZE; i++)
+        *timeAvg += arr[i];
+    
+    *timeAvg = *timeAvg / TIME_AVG_SIZE;
+}
+
+float findMin(float *arr, int seq) {
+    float min = arr[0];
+
+    for(int i = 0; i < seq - 1; i++)
+        if(arr[i] < min) min = arr[i];
+
+    return min;
+}
+
+float findMax(float *arr, int seq) {
+    float max = arr[0];
+    for(int i = 0; i < seq - 1; i++)
+        if(arr[i] > max) max = arr[i];
+
+    return max;
+}
+
+void listener(int signum) {
+    termFlag = 1;
+}
+
 int main(int argc, char **argv) {
     char* servIP = "8.8.8.8";
     int sock;
+    // int termFlag = 0;
     int seq = 1;
     int timeout = 1000;
     int timeoutCounter = 0;
     pid_t pid = getpid();
     float _time;
+    float* timeAvgArr = (float*) malloc(TIME_AVG_SIZE * sizeof(float));
     char echoBuffer[RCVBUFSIZE];
     struct sockaddr_in echoServAddr;
     struct icmp_struct icmp, *recv_icmp;
@@ -90,7 +123,23 @@ int main(int argc, char **argv) {
     echoServAddr.sin_family = AF_INET;
     echoServAddr.sin_addr.s_addr = inet_addr(servIP);
     
+
     while(1) {
+        signal(SIGINT, listener);
+
+        if(termFlag) {
+            float timeAvg, timeMin, timeMax = 0;
+
+            findAvg(timeAvgArr, &timeAvg);
+            timeMin = findMin(timeAvgArr, seq);
+            timeMax = findMax(timeAvgArr, seq);
+
+            printf("\n---------------------------------------------\n\n");
+            printf("time avg: %.3f ms | min: %.3f ms | max: %.3f ms\n\n", timeAvg, timeMin, timeMax);
+
+            exit(0);
+        }
+
         icmp.type = 8;          // 8 - запрос, 0 - ответ
         icmp.code = 0;
         icmp.id = pid;
@@ -113,8 +162,14 @@ int main(int argc, char **argv) {
         if(recv_icmp->type == 0 && recv_icmp->id == pid + 8) {
             _time = mtime() - _time;
             
-            if(_time > 0)
+            if(_time > 0) {
                 printf("seq = %i timeout = %i time = %.3f ms\n", recv_icmp->seq, timeout, _time);
+                
+                if(seq >= TIME_AVG_SIZE)
+                   timeAvgArr = (float*) realloc(timeAvgArr, seq + 1);
+                
+                timeAvgArr[seq - 1] = _time;
+            }
         }
         
         seq++;
