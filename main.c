@@ -7,6 +7,7 @@
 #include <unistd.h>  
 #include <signal.h>  
 #include <sys/time.h>     
+#include <pthread.h>
 
 #define RCVBUFSIZE 255
 #define TIME_AVG_SIZE 5
@@ -22,6 +23,12 @@ struct icmp_struct {
     char data[56];
 };
 
+typedef struct thr_struct {
+    int sock;
+    int _time;
+    char* echoBuffer;
+}recv_thr_struct;
+
 void DieWithError(char *str, int errorCode) {
     fprintf(stderr, "Error: %s. Error code %i\n", str, errorCode);
     exit(1);
@@ -29,7 +36,6 @@ void DieWithError(char *str, int errorCode) {
 
 float mtime() {
     struct timeval t;
-
     gettimeofday(&t, NULL);
     float mt = (float)t.tv_usec / 1000 ;
     return mt;
@@ -91,19 +97,37 @@ void listener(int signum) {
     termFlag = 1;
 }
 
+void *receiveFunc(void *args) {
+    recv_thr_struct *recv_struct = (recv_thr_struct*) args;
+    recvfrom(recv_struct->sock, recv_struct->echoBuffer, RCVBUFSIZE, 0, 0, 0);
+    return EXIT_SUCCESS;
+}
+
+void *sleepFunc(void *args) {
+    int *sleepArr = (int*) args;
+    usleep(sleepArr[0] * 1000);
+    sleepArr[1] = 1;
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv) {
     char* servIP = "8.8.8.8";
     int sock;
-    // int termFlag = 0;
-    int seq = 1;
+    int sleepArr[2];
+    int seq = 1, recvCount = 0, lostPackets = 0;
+    int status_addr = 0;
     int timeout = 1000;
     int timeoutCounter = 0;
+    int thread_recv_status, thread_sleep_status;
+    pthread_t thread_recv, thread_sleep;
     pid_t pid = getpid();
     float _time;
     float* timeAvgArr = (float*) malloc(TIME_AVG_SIZE * sizeof(float));
     char echoBuffer[RCVBUFSIZE];
+    struct timeval tv;
     struct sockaddr_in echoServAddr;
     struct icmp_struct icmp, *recv_icmp;
+    recv_thr_struct recv_struct;
     
     if(argc == 2) servIP = argv[1];
     if(argc == 3) {
@@ -117,12 +141,21 @@ int main(int argc, char **argv) {
 
     if((sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0)
         DieWithError("socket() failed", sock);
+    
+    tv.tv_sec = timeout;                                                    //
+    tv.tv_usec = 0;                                                         // timeout for recvfrom
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv); //
 
     bzero(&echoServAddr, sizeof(echoServAddr));
 
     echoServAddr.sin_family = AF_INET;
     echoServAddr.sin_addr.s_addr = inet_addr(servIP);
     
+    recv_struct.sock = sock;
+    recv_struct._time = _time;
+    recv_struct.echoBuffer = echoBuffer;
+    
+    int recvRun = 0;
 
     while(1) {
         signal(SIGINT, listener);
@@ -135,8 +168,8 @@ int main(int argc, char **argv) {
             timeMax = findMax(timeAvgArr, seq);
 
             printf("\n---------------------------------------------\n\n");
-            printf("time avg: %.3f ms | min: %.3f ms | max: %.3f ms\n\n", timeAvg, timeMin, timeMax);
-
+            printf("time avg: %.3f ms | min: %.3f ms | max: %.3f ms\n", timeAvg, timeMin, timeMax);
+            printf("%i packets transmitted, %i packets received, %.2d%% packet loss\n\n", seq - 1, recvCount, recvCount / seq);
             exit(0);
         }
 
@@ -154,24 +187,23 @@ int main(int argc, char **argv) {
         if(!sendto(sock, &icmp, sizeof(icmp), 0, (struct sockaddr *) &echoServAddr, sizeof(echoServAddr)))
             DieWithError("send() sent a different number of bytes than expected", 1);
 
-        // timeoutCounter++;
-        // if(timeoutCounter > timeout) {
         recvfrom(sock, echoBuffer, RCVBUFSIZE, 0, 0, 0);
         recv_icmp = (struct icmp_struct *)(echoBuffer + 20);
 
-        if(recv_icmp->type == 0 && recv_icmp->id == pid + 8) {
+        if(recv_icmp->type == 0 && recv_icmp->id == icmp.id + 8) {
             _time = mtime() - _time;
             
             if(_time > 0) {
                 printf("seq = %i timeout = %i time = %.3f ms\n", recv_icmp->seq, timeout, _time);
                 
                 if(seq >= TIME_AVG_SIZE)
-                   timeAvgArr = (float*) realloc(timeAvgArr, seq + 1);
+                    timeAvgArr = (float*) realloc(timeAvgArr, seq + 1);
                 
                 timeAvgArr[seq - 1] = _time;
+                recvCount++;
             }
         }
-        
+
         seq++;
         usleep(timeout * 1000);
     }

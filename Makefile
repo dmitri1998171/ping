@@ -1,7 +1,7 @@
 BIN := ping
 SRC := main.c
 CC := gcc
-CFLAGS :=
+CFLAGS := -g
 LDFLAGS :=
 
 $(BIN):
