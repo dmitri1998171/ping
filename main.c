@@ -1,13 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/socket.h> 
-#include <arpa/inet.h> 
-#include <netdb.h> 
+#include <ctype.h>
 #include <stdlib.h>     
 #include <string.h>     
 #include <unistd.h>  
-#include <signal.h>  
 #include <sys/time.h>     
+#include <sys/socket.h> 
+#include <arpa/inet.h> 
+#include <netdb.h> 
+#include <signal.h>  
 
 #define RCVBUFSIZE 255
 
@@ -100,14 +101,45 @@ void listener(int signum) {
     termFlag = 1;
 }
 
+int checkIP(char *str) {
+    int octetCounter = 0;
+    char *token, *last;
+    char *tmp = strdup(str);
+    char *ip = strtok(tmp, ":");
+
+    token = strtok_r(tmp, ".", &last);
+    while(token != NULL) {
+        if(atoi(token) > 255)
+            DieWithError("Invalid IP!", 1);
+        token = strtok_r(NULL, ".", &last);
+        octetCounter++;
+    }
+    
+    if(octetCounter == 4) 
+        return 1;
+    else
+        return 0;
+}
+
+int isNumber(char number[]) {
+    int i = 0;
+
+    if(!strcmp(&number[0], "-"))
+        i = 1;
+
+    for(; i < strlen(number); i++)
+        if(number[i] >= 0x41 && number[i] <= 0x7A)
+            return 0;
+
+    return 1;
+}
+
 int main(int argc, char **argv) {
     char* hostname = "8.8.8.8";
     int sock;
-    int sleepArr[2];
     int seq = 1, recvCount = 0, lostPackets = 0;
     int status_addr = 0;
     int timeout = 1000;
-    int timeoutCounter = 0;
     int thread_recv_status, thread_sleep_status;
     pthread_t thread_recv, thread_sleep;
     pid_t pid = getpid();
@@ -130,16 +162,21 @@ int main(int argc, char **argv) {
        exit(1);
     }
 
+    if(isNumber(hostname)) {
+        if(!checkIP(hostname))
+            DieWithError("Invalid IP", 1);
+    }else {
+        he = gethostbyname(hostname);
+        if(he == NULL)
+            DieWithError("gethostbyname", 1);
+
+        hostname = inet_ntoa(*(struct in_addr*)he->h_addr);
+        printf("DNS name: %s\n", he->h_name);
+    }
+    printf("IP-address: %s\n\n", hostname);
+
     if((sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0)
         DieWithError("socket() failed", sock);
-
-    he = gethostbyname(hostname);
-    if(he == NULL)
-        DieWithError("gethostbyname", 1);
-
-    hostname = inet_ntoa(*(struct in_addr*)he->h_addr);
-    printf("официальное имя: %s\n", he->h_name);
-    printf("IP-адрес       : %s\n\n", hostname);
 
     tv.tv_sec = timeout;                                                    //
     tv.tv_usec = 0;                                                         // timeout for recvfrom
