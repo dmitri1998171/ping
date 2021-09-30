@@ -23,12 +23,6 @@ struct icmp_struct {
     char data[56];
 };
 
-typedef struct thr_struct {
-    int sock;
-    int _time;
-    char* echoBuffer;
-}recv_thr_struct;
-
 void DieWithError(char *str, int errorCode) {
     fprintf(stderr, "Error: %s. Error code %i\n", str, errorCode);
     exit(1);
@@ -135,7 +129,6 @@ int isNumber(char number[]) {
 }
 
 int main(int argc, char **argv) {
-    char* hostname = "8.8.8.8";
     int sock;
     int seq = 1, recvCount = 0, lostPackets = 0;
     int status_addr = 0;
@@ -145,16 +138,15 @@ int main(int argc, char **argv) {
     pid_t pid = getpid();
     float _time;
     float* timeAvgArr = (float*) malloc(1 * sizeof(float));
+    char* hostname = "8.8.8.8";
     char echoBuffer[RCVBUFSIZE];
     struct timeval tv;
     struct hostent *he;
     struct sockaddr_in echoServAddr;
     struct icmp_struct icmp, *recv_icmp;
-    recv_thr_struct recv_struct;
     
-    if(argc == 2) hostname = argv[1];
-    if(argc == 3) {
-        hostname = argv[1];
+    if(argc > 1) hostname = argv[1];
+    if(argc > 2) {
         timeout = atoi(argv[2]);
     }
     if(argc > 3) {
@@ -187,12 +179,6 @@ int main(int argc, char **argv) {
     echoServAddr.sin_family = AF_INET;
     echoServAddr.sin_addr.s_addr = inet_addr(hostname);
     
-    recv_struct.sock = sock;
-    recv_struct._time = _time;
-    recv_struct.echoBuffer = echoBuffer;
-    
-    int recvRun = 0;
-
     while(1) {
         signal(SIGINT, listener);
 
@@ -242,7 +228,6 @@ int main(int argc, char **argv) {
 
         seq++;
         usleep(timeout * 1000);
-        // sleep(timeout);
     }
 
     return 0;
