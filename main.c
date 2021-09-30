@@ -1,16 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h> 
-#include <arpa/inet.h>  
+#include <arpa/inet.h> 
+#include <netdb.h> 
 #include <stdlib.h>     
 #include <string.h>     
 #include <unistd.h>  
 #include <signal.h>  
 #include <sys/time.h>     
-#include <pthread.h>
 
 #define RCVBUFSIZE 255
-#define TIME_AVG_SIZE 5
 
 ushort termFlag = 0;
 
@@ -34,10 +33,10 @@ void DieWithError(char *str, int errorCode) {
     exit(1);
 }
 
-float mtime() {
-    struct timeval t;
-    gettimeofday(&t, NULL);
-    float mt = (float)t.tv_usec / 1000 ;
+float mtime(struct timeval* tv) {
+    // struct timeval t;
+    gettimeofday(tv, NULL);
+    float mt = (float)tv->tv_usec / 1000 ;
     return mt;
 }
 
@@ -69,11 +68,15 @@ unsigned short in_cksum(unsigned short *addr, int len) {
     return(answer);
 }
 
-void findAvg(float *arr, float *timeAvg) {
-    for(int i = 0; i < TIME_AVG_SIZE; i++)
-        *timeAvg += arr[i];
+float findAvg(float *arr, int seq) {
+    float timeAvg = 0;
+
+    for(int i = 0; i < seq; i++)
+        timeAvg += arr[i];
     
-    *timeAvg = *timeAvg / TIME_AVG_SIZE;
+    timeAvg = timeAvg / seq;
+
+    return timeAvg;
 }
 
 float findMin(float *arr, int seq) {
@@ -97,21 +100,8 @@ void listener(int signum) {
     termFlag = 1;
 }
 
-void *receiveFunc(void *args) {
-    recv_thr_struct *recv_struct = (recv_thr_struct*) args;
-    recvfrom(recv_struct->sock, recv_struct->echoBuffer, RCVBUFSIZE, 0, 0, 0);
-    return EXIT_SUCCESS;
-}
-
-void *sleepFunc(void *args) {
-    int *sleepArr = (int*) args;
-    usleep(sleepArr[0] * 1000);
-    sleepArr[1] = 1;
-    return EXIT_SUCCESS;
-}
-
 int main(int argc, char **argv) {
-    char* servIP = "8.8.8.8";
+    char* hostname = "8.8.8.8";
     int sock;
     int sleepArr[2];
     int seq = 1, recvCount = 0, lostPackets = 0;
@@ -122,16 +112,17 @@ int main(int argc, char **argv) {
     pthread_t thread_recv, thread_sleep;
     pid_t pid = getpid();
     float _time;
-    float* timeAvgArr = (float*) malloc(TIME_AVG_SIZE * sizeof(float));
+    float* timeAvgArr = (float*) malloc(1 * sizeof(float));
     char echoBuffer[RCVBUFSIZE];
     struct timeval tv;
+    struct hostent *he;
     struct sockaddr_in echoServAddr;
     struct icmp_struct icmp, *recv_icmp;
     recv_thr_struct recv_struct;
     
-    if(argc == 2) servIP = argv[1];
+    if(argc == 2) hostname = argv[1];
     if(argc == 3) {
-        servIP = argv[1];
+        hostname = argv[1];
         timeout = atoi(argv[2]);
     }
     if(argc > 3) {
@@ -141,7 +132,15 @@ int main(int argc, char **argv) {
 
     if((sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0)
         DieWithError("socket() failed", sock);
-    
+
+    he = gethostbyname(hostname);
+    if(he == NULL)
+        DieWithError("gethostbyname", 1);
+
+    hostname = inet_ntoa(*(struct in_addr*)he->h_addr);
+    printf("официальное имя: %s\n", he->h_name);
+    printf("IP-адрес       : %s\n\n", hostname);
+
     tv.tv_sec = timeout;                                                    //
     tv.tv_usec = 0;                                                         // timeout for recvfrom
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv); //
@@ -149,7 +148,7 @@ int main(int argc, char **argv) {
     bzero(&echoServAddr, sizeof(echoServAddr));
 
     echoServAddr.sin_family = AF_INET;
-    echoServAddr.sin_addr.s_addr = inet_addr(servIP);
+    echoServAddr.sin_addr.s_addr = inet_addr(hostname);
     
     recv_struct.sock = sock;
     recv_struct._time = _time;
@@ -163,13 +162,13 @@ int main(int argc, char **argv) {
         if(termFlag) {
             float timeAvg, timeMin, timeMax = 0;
 
-            findAvg(timeAvgArr, &timeAvg);
+            timeAvg = findAvg(timeAvgArr, seq);
             timeMin = findMin(timeAvgArr, seq);
             timeMax = findMax(timeAvgArr, seq);
 
             printf("\n---------------------------------------------\n\n");
             printf("time avg: %.3f ms | min: %.3f ms | max: %.3f ms\n", timeAvg, timeMin, timeMax);
-            printf("%i packets transmitted, %i packets received, %.2d%% packet loss\n\n", seq - 1, recvCount, recvCount / seq);
+            printf("%i packets transmitted, %i packets received, %d%% packet loss\n\n", seq - 1, recvCount, recvCount / seq);
             exit(0);
         }
 
@@ -179,7 +178,7 @@ int main(int argc, char **argv) {
         icmp.seq = seq;
         icmp.checksum = 0;
         
-        _time = mtime();
+        _time = mtime(&tv);
         sprintf(icmp.data, "%f", _time);
 
         icmp.checksum = in_cksum((u_short *) &icmp, sizeof(icmp));
@@ -191,12 +190,12 @@ int main(int argc, char **argv) {
         recv_icmp = (struct icmp_struct *)(echoBuffer + 20);
 
         if(recv_icmp->type == 0 && recv_icmp->id == icmp.id + 8) {
-            _time = mtime() - _time;
+            _time = mtime(&tv) - _time;
             
             if(_time > 0) {
                 printf("seq = %i timeout = %i time = %.3f ms\n", recv_icmp->seq, timeout, _time);
                 
-                if(seq >= TIME_AVG_SIZE)
+                if(seq >= 1)
                     timeAvgArr = (float*) realloc(timeAvgArr, seq + 1);
                 
                 timeAvgArr[seq - 1] = _time;
@@ -206,6 +205,7 @@ int main(int argc, char **argv) {
 
         seq++;
         usleep(timeout * 1000);
+        // sleep(timeout);
     }
 
     return 0;
